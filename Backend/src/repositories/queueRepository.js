@@ -27,7 +27,11 @@ const findTokenById = async (id) => {
 
 const findTokenByAppointment = async (appointmentId) => {
   const { rows } = await db.query(
-    'SELECT * FROM queue_tokens WHERE appointment_id = $1',
+    `SELECT * FROM queue_tokens
+     WHERE appointment_id = $1
+     ORDER BY (status IN ('WAITING', 'CALLED', 'SKIPPED', 'IN_SERVICE')) DESC,
+              created_at DESC
+     LIMIT 1`,
     [appointmentId]
   );
   return rows[0] || null;
@@ -39,36 +43,26 @@ const findTokenByAppointment = async (appointmentId) => {
  */
 const nextTokenNumber = async (client, serviceId, tokenDate) => {
   const { rows } = await client.query(
-    `SELECT COALESCE(MAX(token_number), 0) + 1 AS next
-     FROM queue_tokens
-     WHERE service_id = $1 AND token_date = $2
-     FOR UPDATE`,
+    `INSERT INTO queue_token_counters (service_id, token_date, last_token_number)
+     VALUES ($1, $2, 1)
+     ON CONFLICT (service_id, token_date) DO UPDATE
+       SET last_token_number = queue_token_counters.last_token_number + 1
+     RETURNING last_token_number AS next`,
     [serviceId, tokenDate]
   );
   return rows[0].next;
 };
 
 const createToken = async (client, { appointmentId, serviceId, tokenNumber, tokenDate, isPriority }) => {
-  // Determine position — priority tokens jump ahead of non-priority waiting tokens
-  let positionQuery;
-  if (isPriority) {
-    positionQuery = await client.query(
-      `SELECT COALESCE(MAX(position), 0) + 1 AS pos
-       FROM queue_tokens
-       WHERE service_id = $1 AND token_date = $2
-         AND status = 'WAITING' AND is_priority = TRUE`,
-      [serviceId, tokenDate]
-    );
-  } else {
-    positionQuery = await client.query(
-      `SELECT COALESCE(MAX(position), 0) + 1 AS pos
-       FROM queue_tokens
-       WHERE service_id = $1 AND token_date = $2
-         AND status = 'WAITING'`,
-      [serviceId, tokenDate]
-    );
-  }
-  const position = positionQuery.rows[0].pos;
+  const { rows: [counter] } = await client.query(
+    `UPDATE queue_token_counters
+     SET last_position = last_position + 1
+     WHERE service_id = $1 AND token_date = $2
+     RETURNING last_position`,
+    [serviceId, tokenDate]
+  );
+  if (!counter) throw new Error('Queue counter was not allocated before token creation.');
+  const position = counter.last_position;
 
   const { rows } = await client.query(
     `INSERT INTO queue_tokens

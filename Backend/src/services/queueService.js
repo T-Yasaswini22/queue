@@ -75,7 +75,9 @@ const skipToken = async (tokenId, staffId) => {
   if (!assigned) throw ApiError.forbidden('You are not assigned to this service.');
 
   return withTransaction(async (client) => {
-    return queueRepository.updateTokenStatus(client, tokenId, 'SKIPPED');
+    return queueRepository.updateTokenStatus(client, tokenId, 'SKIPPED', {
+      servedBy: staffId,
+    });
   });
 };
 
@@ -116,7 +118,9 @@ const startService = async (tokenId, staffId) => {
   if (!assigned) throw ApiError.forbidden('You are not assigned to this service.');
 
   return withTransaction(async (client) =>
-    queueRepository.updateTokenStatus(client, tokenId, 'IN_SERVICE')
+    queueRepository.updateTokenStatus(client, tokenId, 'IN_SERVICE', {
+      servedBy: staffId,
+    })
   );
 };
 
